@@ -1,0 +1,614 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# app.R
+
+library(shiny)
+library(plotly)
+library(dplyr)
+library(stringr)
+library(RColorBrewer)
+
+# ─── 1) Load & prepare data ───────────────────────────────────────────────────
+df <- read.csv("pokemon_data.csv", stringsAsFactors = FALSE)
+
+# Ensure image_url exists
+if (!"image_url" %in% names(df)) {
+  df$image_url <- paste0(
+    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/",
+    df$id, ".png"
+  )
+}
+
+# Parse out attack & defense from the `stats` column
+df <- df %>%
+  mutate(
+    attack  = as.numeric(str_match(stats, "attack=(\\d+)")[,2]),
+    defense = as.numeric(str_match(stats, "defense=(\\d+)")[,2])
+  )
+
+# Assign generation based on ID
+gen_ranges <- list(
+  `1` = 1:151,  `2` = 152:251, `3` = 252:386,
+  `4` = 387:493, `5` = 494:649, `6` = 650:721,
+  `7` = 722:809, `8` = 810:905, `9` = 906:1025
+)
+df$generation <- sapply(df$id, function(x) {
+  g <- names(gen_ranges)[sapply(gen_ranges, function(r) x %in% r)]
+  if (length(g)) return(as.integer(g)) else return(99)
+})
+
+# Split types into primary & secondary
+split_types <- function(s) {
+  parts <- if (is.na(s)) character() else str_split(s, ",")[[1]] %>% str_trim()
+  c(primary = parts[1], secondary = ifelse(length(parts)>1, parts[2], NA))
+}
+types_df <- t(sapply(df$types, split_types))
+df$primary_type   <- types_df[, "primary"]
+df$secondary_type <- types_df[, "secondary"]
+
+# Compute sizex/sizey so hover icons are visible
+attack_range  <- diff(range(df$attack,  na.rm = TRUE))
+defense_range <- diff(range(df$defense, na.rm = TRUE))
+icon_size_x   <- attack_range  * 0.5
+icon_size_y   <- defense_range * 0.5
+
+# Build choices for filters
+gen_choices <- c("All", sort(unique(df$generation)))
+type_choices <- c(
+  "All",
+  sort(unique(na.omit(c(df$primary_type, df$secondary_type))))
+)
+
+
+# Choose a qualitative palette for primary types
+pal <- brewer.pal(8, "Set2")
+type_palette <- setNames(
+  rep(pal, length.out = length(unique(df$primary_type))),
+  unique(df$primary_type)
+)
+
+# ─── 2) UI ─────────────────────────────────────────────────────────────────────
+ui <- fluidPage(
+  titlePanel("Pokémon Attack vs Defense"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("gen",  "Generation:", choices = gen_choices, selected = "All"),
+      selectInput("type", "Type (any):", choices = type_choices, selected = "All"),
+      helpText("Hover a point to see its sprite; color = primary type.")
+    , width = 3),
+    mainPanel(
+      plotlyOutput("plot", height = "700px")
+    , width = 9)
+  )
+)
+
+# ─── 3) Server ─────────────────────────────────────────────────────────────────
+server <- function(input, output, session) {
+
+  # Reactive filtered dataset
+  filtered <- reactive({
+    d <- df
+    if (input$gen != "All") {
+      d <- d[d$generation == as.integer(input$gen), ]
+    }
+    if (input$type != "All") {
+      d <- d[d$primary_type == input$type | d$secondary_type == input$type, ]
+    }
+    d
+  })
+
+  # Render base scatter with colors by primary_type
+  output$plot <- renderPlotly({
+    d0 <- filtered()
+    plot_ly(
+      data       = d0,
+      x          = ~attack,
+      y          = ~defense,
+      type       = "scatter",
+      mode       = "markers",
+      color      = ~primary_type,
+      colors     = type_palette,
+      marker     = list(size = 14, line = list(width = 1, color = "#333")),
+      hoverinfo  = "none",
+      customdata = ~image_url,
+      source     = "hoversrc"
+    ) %>%
+      layout(
+        xaxis  = list(title = "Attack",  gridcolor = "#eee"),
+        yaxis  = list(title = "Defense", gridcolor = "#eee"),
+        plot_bgcolor = "#fafafa",
+        paper_bgcolor = "#fafafa",
+        legend = list(title = list(text = "Primary Type")),
+        margin = list(l = 60, r = 60, t = 40, b = 60),
+        images = list()   # initialize
+      ) %>%
+      event_register("plotly_hover") %>%
+      event_register("plotly_unhover")
+  })
+
+  # On hover: inject the sprite image
+  observeEvent(event_data("plotly_hover", source = "hoversrc"), {
+    ev <- event_data("plotly_hover", source = "hoversrc")
+    img <- list(
+      list(
+        source  = ev$customdata,
+        xref    = "x", yref = "y",
+        x       = ev$x, y   = ev$y,
+        sizex   = icon_size_x,
+        sizey   = icon_size_y,
+        xanchor = "center",
+        yanchor = "middle",
+        layer   = "above"
+      )
+    )
+    plotlyProxy("plot", session) %>%
+      plotlyProxyInvoke("relayout", list(images = img))
+  })
+
+  # On unhover: clear the image
+  observeEvent(event_data("plotly_unhover", source = "hoversrc"), {
+    plotlyProxy("plot", session) %>%
+      plotlyProxyInvoke("relayout", list(images = list()))
+  })
+}
+
+# ─── 4) Run the app ─────────────────────────────────────────────────────────────
+shinyApp(ui, server)
+
+```
+
+```{r}
+# app.R
+
+library(shiny)
+library(plotly)
+library(dplyr)
+library(stringr)
+library(RColorBrewer)
+
+# ─── 1) Load & prepare data ───────────────────────────────────────────────────
+df <- read.csv("pokemon_data.csv", stringsAsFactors = FALSE)
+
+# Ensure image_url exists
+if (!"image_url" %in% names(df)) {
+  df$image_url <- paste0(
+    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/",
+    df$id, ".png"
+  )
+}
+
+# Parse out all stats into separate numeric columns
+df <- df %>%
+  mutate(
+    hp               = as.numeric(str_match(stats, "hp=(\\d+)")[,2]),
+    attack           = as.numeric(str_match(stats, "attack=(\\d+)")[,2]),
+    defense          = as.numeric(str_match(stats, "defense=(\\d+)")[,2]),
+    special_attack   = as.numeric(str_match(stats, "special-attack=(\\d+)")[,2]),
+    special_defense  = as.numeric(str_match(stats, "special-defense=(\\d+)")[,2]),
+    speed            = as.numeric(str_match(stats, "speed=(\\d+)")[,2])
+  )
+
+# Assign generation based on ID
+gen_ranges <- list(
+  `1` = 1:151,  `2` = 152:251, `3` = 252:386,
+  `4` = 387:493, `5` = 494:649, `6` = 650:721,
+  `7` = 722:809, `8` = 810:905, `9` = 906:1025
+)
+df$generation <- sapply(df$id, function(x) {
+  g <- names(gen_ranges)[sapply(gen_ranges, function(r) x %in% r)]
+  if (length(g)) as.integer(g) else 99
+})
+
+# Split types into primary & secondary
+split_types <- function(s) {
+  parts <- if (is.na(s)) character() else str_split(s, ",")[[1]] %>% str_trim()
+  c(primary   = parts[1],
+    secondary = ifelse(length(parts) > 1, parts[2], NA))
+}
+types_df <- t(sapply(df$types, split_types))
+df$primary_type   <- types_df[, "primary"]
+df$secondary_type <- types_df[, "secondary"]
+
+# Compute sizex/sizey for hover icons
+attack_range  <- diff(range(df$attack,  na.rm = TRUE))
+defense_range <- diff(range(df$defense, na.rm = TRUE))
+icon_size_x   <- attack_range  * 0.2
+icon_size_y   <- defense_range * 0.2
+
+# Build filter choices
+gen_choices  <- c("All", sort(unique(df$generation)))
+type_choices <- c(
+  "All",
+  sort(unique(na.omit(c(df$primary_type, df$secondary_type))))
+)
+
+# Color palette for primary types
+pal <- brewer.pal(8, "Set2")
+type_palette <- setNames(
+  rep(pal, length.out = length(unique(df$primary_type))),
+  unique(df$primary_type)
+)
+
+# ─── 2) UI ─────────────────────────────────────────────────────────────────────
+ui <- fluidPage(
+  titlePanel("Pokémon Explorer: Scatter + Radar"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("gen",  "Generation:", choices = gen_choices, selected = "All"),
+      selectInput("type", "Type (primary or secondary):", choices = type_choices, selected = "All"),
+      helpText("Hover scatter points to see sprite. Radar shows average stats of filtered Pokémon.")
+    , width = 3),
+    mainPanel(
+      fluidRow(
+        column(width = 6, plotlyOutput("scatter", height = "600px")),
+        column(width = 6, plotlyOutput("radar",   height = "600px"))
+      )
+    , width = 9)
+  )
+)
+
+# ─── 3) Server ─────────────────────────────────────────────────────────────────
+server <- function(input, output, session) {
+
+  # Reactive filtered data
+  filtered <- reactive({
+    d <- df
+    if (input$gen != "All") {
+      d <- d[d$generation == as.integer(input$gen), ]
+    }
+    if (input$type != "All") {
+      d <- d[
+        d$primary_type   == input$type |
+        d$secondary_type == input$type,
+      ]
+    }
+    d
+  })
+
+  # Scatter plot with hover-image
+  output$scatter <- renderPlotly({
+    d0 <- filtered()
+    plot_ly(
+      data       = d0,
+      x          = ~attack,
+      y          = ~defense,
+      type       = "scatter",
+      mode       = "markers",
+      color      = ~primary_type,
+      colors     = type_palette,
+      marker     = list(size = 14, line = list(width = 1, color = "#333")),
+      hoverinfo  = "none",
+      customdata = ~image_url,
+      source     = "scatter_src"
+    ) %>%
+      layout(
+        xaxis        = list(title = "Attack",  gridcolor = "#eee"),
+        yaxis        = list(title = "Defense", gridcolor = "#eee"),
+        plot_bgcolor = "#fafafa",
+        paper_bgcolor= "#fafafa",
+        legend       = list(title = list(text = "Primary Type")),
+        margin       = list(l = 60, r = 60, t = 40, b = 60),
+        images       = list()
+      ) %>%
+      event_register("plotly_hover") %>%
+      event_register("plotly_unhover")
+  })
+
+  # Inject/remove sprite on scatter hover
+  observeEvent(event_data("plotly_hover", source = "scatter_src"), {
+    ev <- event_data("plotly_hover", source = "scatter_src")
+    img <- list(
+      list(
+        source  = ev$customdata,
+        xref    = "x", yref = "y",
+        x       = ev$x, y   = ev$y,
+        sizex   = icon_size_x,
+        sizey   = icon_size_y,
+        xanchor = "center",
+        yanchor = "middle",
+        layer   = "above"
+      )
+    )
+    plotlyProxy("scatter", session) %>%
+      plotlyProxyInvoke("relayout", list(images = img))
+  })
+  observeEvent(event_data("plotly_unhover", source = "scatter_src"), {
+    plotlyProxy("scatter", session) %>%
+      plotlyProxyInvoke("relayout", list(images = list()))
+  })
+
+  # Radar plot of average stats
+  output$radar <- renderPlotly({
+    d0 <- filtered()
+    # compute averages (or zeros if none)
+    stats_mean <- d0 %>% 
+      summarise(
+        HP      = if(n()>0) mean(hp,             na.rm=TRUE) else 0,
+        Attack  = if(n()>0) mean(attack,         na.rm=TRUE) else 0,
+        Defense = if(n()>0) mean(defense,        na.rm=TRUE) else 0,
+        `Sp.Att`= if(n()>0) mean(special_attack, na.rm=TRUE) else 0,
+        `Sp.Def`= if(n()>0) mean(special_defense,na.rm=TRUE) else 0,
+        Speed   = if(n()>0) mean(speed,          na.rm=TRUE) else 0
+      ) %>% unlist()
+
+    fig <- plot_ly(
+      type='scatterpolar',
+      r     = stats_mean,
+      theta = names(stats_mean),
+      fill  = 'toself',
+      marker= list(color = 'rgba(0,100,200,0.7)')
+    ) %>% layout(
+      polar = list(
+        radialaxis = list(visible=TRUE, range=c(0, max(stats_mean)*1.2))
+      ),
+      showlegend = FALSE,
+      title      = paste("Avg Stats — Gen", input$gen, "| Type:", input$type)
+    )
+    fig
+  })
+}
+
+# ─── 4) Run the app ─────────────────────────────────────────────────────────────
+shinyApp(ui, server)
+
+```
+```{r}
+# app.R
+
+library(shiny)
+library(plotly)
+library(dplyr)
+library(stringr)
+library(RColorBrewer)
+
+# ─── 1) Load & prep data ───────────────────────────────────────────────────────
+df <- read.csv("pokemon_data.csv", stringsAsFactors = FALSE)
+
+if (!"image_url" %in% names(df)) {
+  df$image_url <- paste0(
+    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/",
+    df$id, ".png"
+  )
+}
+
+# parse stats
+df <- df %>% mutate(
+  hp              = as.numeric(str_match(stats, "hp=(\\d+)")[,2]),
+  attack          = as.numeric(str_match(stats, "attack=(\\d+)")[,2]),
+  defense         = as.numeric(str_match(stats, "defense=(\\d+)")[,2]),
+  special_attack  = as.numeric(str_match(stats, "special-attack=(\\d+)")[,2]),
+  special_defense = as.numeric(str_match(stats, "special-defense=(\\d+)")[,2]),
+  speed           = as.numeric(str_match(stats, "speed=(\\d+)")[,2])
+)
+
+# assign generation
+gen_ranges <- list(
+  `1`=1:151, `2`=152:251, `3`=252:386,
+  `4`=387:493, `5`=494:649, `6`=650:721,
+  `7`=722:809, `8`=810:905, `9`=906:1025
+)
+df$generation <- sapply(df$id, function(x) {
+  g <- names(gen_ranges)[sapply(gen_ranges, function(r) x %in% r)]
+  if (length(g)) as.integer(g) else 99
+})
+
+# split types
+split_types <- function(s) {
+  parts <- if (is.na(s)) character() else str_split(s, ",")[[1]] %>% str_trim()
+  c(primary=parts[1], secondary=ifelse(length(parts)>1, parts[2], NA))
+}
+types_df <- t(sapply(df$types, split_types))
+df$primary_type   <- types_df[,1]
+df$secondary_type <- types_df[,2]
+
+# hover‐icon sizing
+attack_range  <- diff(range(df$attack,  na.rm=TRUE))
+defense_range <- diff(range(df$defense, na.rm=TRUE))
+icon_size_x   <- attack_range  * 0.5
+icon_size_y   <- defense_range * 0.5
+
+# dropdown choices
+stat_choices <- c("hp","attack","defense",
+                  "special_attack","special_defense","speed")
+gen_choices  <- c("All", sort(unique(df$generation)))
+type_choices <- c("All", sort(unique(na.omit(c(df$primary_type, df$secondary_type)))))
+
+# color palette
+pal <- brewer.pal(8,"Set2")
+type_palette <- setNames(
+  rep(pal, length.out=length(unique(df$primary_type))),
+  unique(df$primary_type)
+)
+
+# ─── 2) UI ─────────────────────────────────────────────────────────────────────
+ui <- fluidPage(
+  titlePanel("Pokémon Explorer"),
+  tabsetPanel(
+    tabPanel("2D Scatter",
+      sidebarLayout(
+        sidebarPanel(
+          selectInput("gen2d",   "Generation:", choices=gen_choices, selected="All"),
+          selectInput("type2d",  "Type (any):", choices=type_choices, selected="All"),
+          selectInput("stat2d_x","X‐axis stat:", choices=stat_choices, selected="attack"),
+          selectInput("stat2d_y","Y‐axis stat:", choices=stat_choices, selected="defense"),
+          helpText("Hover to see sprite on plot")
+        ),
+        mainPanel(
+          plotlyOutput("scatter2d", height="600px")
+        )
+      )
+    ),
+    tabPanel("3D Scatter",
+      sidebarLayout(
+        sidebarPanel(
+          selectInput("gen3d",   "Generation:", choices=gen_choices, selected="All"),
+          selectInput("type3d",  "Type (any):", choices=type_choices, selected="All"),
+          selectInput("stat3d_x","X‐axis stat:", choices=stat_choices, selected="attack"),
+          selectInput("stat3d_y","Y‐axis stat:", choices=stat_choices, selected="defense"),
+          selectInput("stat3d_z","Z‐axis stat:", choices=stat_choices, selected="speed"),
+          helpText("Hover plot: sprite appears at right")
+        ),
+        mainPanel(
+          fluidRow(
+            column(9, plotlyOutput("scatter3d", height="600px")),
+            column(3, uiOutput("hover3d"))
+          )
+        )
+      )
+    ),
+    tabPanel("Radar",
+      sidebarLayout(
+        sidebarPanel(
+          selectInput("genR",  "Generation:", choices=gen_choices, selected="All"),
+          selectInput("typeR", "Type (any):", choices=type_choices, selected="All"),
+          helpText("Average stats for filtered Pokémon")
+        ),
+        mainPanel(
+          plotlyOutput("radar", height="600px")
+        )
+      )
+    )
+  )
+)
+
+# ─── 3) Server ─────────────────────────────────────────────────────────────────
+server <- function(input, output, session) {
+  
+  # filtered data per tab
+  filtered2d <- reactive({
+    d <- df
+    if (input$gen2d!="All")  d <- d[d$generation==input$gen2d,]
+    if (input$type2d!="All") d <- d[d$primary_type==input$type2d | d$secondary_type==input$type2d,]
+    d
+  })
+  filtered3d <- reactive({
+    d <- df
+    if (input$gen3d!="All")  d <- d[d$generation==input$gen3d,]
+    if (input$type3d!="All") d <- d[d$primary_type==input$type3d | d$secondary_type==input$type3d,]
+    d
+  })
+  filteredR <- reactive({
+    d <- df
+    if (input$genR!="All")  d <- d[d$generation==input$genR,]
+    if (input$typeR!="All") d <- d[d$primary_type==input$typeR | d$secondary_type==input$typeR,]
+    d
+  })
+  
+  # 2D scatter
+  output$scatter2d <- renderPlotly({
+    d0 <- filtered2d()
+    plot_ly(
+      x = d0[[input$stat2d_x]],
+      y = d0[[input$stat2d_y]],
+      type="scatter", mode="markers",
+      marker=list(size=12,
+                  color=type_palette[d0$primary_type],
+                  line=list(width=1,color="#333")),
+      hoverinfo="none",
+      customdata=d0$image_url, source="2d_src"
+    ) %>% layout(
+      title=paste("2D:", input$stat2d_x, "vs", input$stat2d_y),
+      xaxis=list(title=input$stat2d_x),
+      yaxis=list(title=input$stat2d_y),
+      images=list()
+    ) %>% event_register("plotly_hover") %>% event_register("plotly_unhover")
+  })
+  observeEvent(event_data("plotly_hover", source="2d_src"), {
+    ev <- event_data("plotly_hover", source="2d_src")
+    img <- list(list(
+      source=ev$customdata, xref="x", yref="y", 
+      x=ev$x, y=ev$y,
+      sizex=icon_size_x, sizey=icon_size_y,
+      xanchor="center", yanchor="middle", layer="above"
+    ))
+    plotlyProxy("scatter2d", session) %>%
+      plotlyProxyInvoke("relayout", list(images=img))
+  })
+  observeEvent(event_data("plotly_unhover", source="2d_src"), {
+    plotlyProxy("scatter2d", session) %>%
+      plotlyProxyInvoke("relayout", list(images=list()))
+  })
+  
+  # 3D scatter
+  output$scatter3d <- renderPlotly({
+    d0 <- filtered3d()
+    plot_ly(
+      data=d0,
+      x=~get(input$stat3d_x),
+      y=~get(input$stat3d_y),
+      z=~get(input$stat3d_z),
+      type="scatter3d", mode="markers",
+      marker=list(size=4, color=~get(input$stat3d_x), colorscale="Viridis", showscale=TRUE),
+      hoverinfo="none", customdata=~image_url, source="3d_src"
+    ) %>% layout(
+      title=paste("3D:", input$stat3d_x, input$stat3d_y, input$stat3d_z),
+      scene=list(
+        xaxis=list(title=input$stat3d_x),
+        yaxis=list(title=input$stat3d_y),
+        zaxis=list(title=input$stat3d_z)
+      )
+    ) %>% event_register("plotly_hover") %>% event_register("plotly_unhover")
+  })
+  output$hover3d <- renderUI({
+    ev <- event_data("plotly_hover", source="3d_src")
+    if (is.null(ev)) return(NULL)
+    tags$img(src=ev$customdata, style="width:100%; border:1px solid #ccc;")
+  })
+  
+  
+    # 3D hover‑info: sprite + name + chosen stats
+  output$hover3d <- renderUI({
+    ev <- event_data("plotly_hover", source="3d_src")
+    if (is.null(ev)) return(NULL)
+
+    d0  <- filtered3d()               # your reactive subset for 3D
+    idx <- ev$pointNumber + 1         # R is 1‑based; JS event is 0‑based
+    poke <- d0[idx, , drop=FALSE]     # that single row
+
+    # pull out the three axis stats they selected
+    xst <- input$stat3d_x
+    yst <- input$stat3d_y
+    zst <- input$stat3d_z
+
+    tagList(
+      tags$img(src = poke$image_url, style="width:100%; border:1px solid #ccc;"),
+      tags$h4(poke$name),
+      tags$p(sprintf("%s: %s", xst, poke[[xst]])),
+      tags$p(sprintf("%s: %s", yst, poke[[yst]])),
+      tags$p(sprintf("%s: %s", zst, poke[[zst]]))
+    )
+  })
+
+  
+  # Radar
+  output$radar <- renderPlotly({
+    d0 <- filteredR()
+    stats_mean <- d0 %>% summarise(
+      HP   = mean(hp, na.rm=TRUE),
+      Atk  = mean(attack, na.rm=TRUE),
+      Def  = mean(defense, na.rm=TRUE),
+      SpA  = mean(special_attack, na.rm=TRUE),
+      SpD  = mean(special_defense, na.rm=TRUE),
+      Spd  = mean(speed, na.rm=TRUE)
+    ) %>% unlist()
+    plot_ly(
+      type='scatterpolar', r=stats_mean,
+      theta=names(stats_mean), fill='toself',
+      marker=list(color='rgba(0,123,200,0.5)')
+    ) %>% layout(
+      title="Radar: Average Stats",
+      polar=list(radialaxis=list(visible=TRUE, range=c(0,max(stats_mean)*1.2))),
+      showlegend=FALSE
+    )
+  })
+}
+
+# ─── 4) Run ─────────────────────────────────────────────────────────────────────
+shinyApp(ui, server)
+
+```
+
